@@ -33,9 +33,11 @@ The Outlook tools interact with a local running instance of Microsoft Outlook.
 The Trello tools interface with the Trello API using configuration credentials.
 
 ### Guidelines for the Agent:
-*   **Columns/Lists**: Call [get_trello_board_lists](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L22) to discover columns on the target board. If `board_id` is omitted or invalid, it redirects to the default allowed board.
-*   **Querying Cards**: Call [get_trello_cards_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L77) with a list ID. You can apply filters (e.g., searching by card name or status) and sorting parameters.
-*   **Card Details**: Call [get_trello_card_by_id](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L190) to retrieve comments, checklists, descriptions, and due dates for a specific card.
+*   **Columns/Lists**: Call [get_trello_board_lists](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L76) to discover columns on the target board. If `board_id` is omitted or invalid, it redirects to the default allowed board.
+*   **Querying Cards**: Call [get_trello_cards_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L131) with a list ID. You can apply filters (e.g., searching by card name or status) and sorting parameters.
+*   **Card Details**: Call [get_trello_card_by_id](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L234) to retrieve comments, checklists, descriptions, and due dates for a specific card.
+*   **Creating Cards**: Call [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325) to create a new card in a specific list, providing a name, description, and optional due date.
+*   **Updating Cards**: Call [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378) to update an existing card's details (such as name, description, or due date) or to move it to a different list.
 
 ---
 
@@ -44,4 +46,5 @@ The Trello tools interface with the Trello API using configuration credentials.
 The following actions are sensitive and should require human confirmation or review in the agent client policy:
 *   Reading email bodies via `get_email_body_by_id`.
 *   Reading specific card details via `get_trello_card_by_id` if they contain confidential description/comment fields.
-*   Any write operation (such as adding/updating cards or sending emails) when implemented.
+*   Any write or update operation on Trello cards, specifically [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325) and [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378).
+*   Any email operations that write or send emails (such as [write_email_to](file:///C:/Programming/Portafolio/local-utils-mcp/services/outlook.py#L311) in Outlook).
