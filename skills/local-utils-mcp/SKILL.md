@@ -37,7 +37,8 @@ The Trello tools interface with the Trello API using configuration credentials.
 *   **Querying Cards**: Call [get_trello_cards_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L131) with a list ID. You can apply filters (e.g., searching by card name or status) and sorting parameters.
 *   **Card Details**: Call [get_trello_card_by_id](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L234) to retrieve comments, checklists, descriptions, and due dates for a specific card.
 *   **Creating Cards**: Call [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325) to create a new card in a specific list, providing a name, description, and optional due date.
-*   **Updating Cards**: Call [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378) to update an existing card's details (such as name, description, or due date) or to move it to a different list.
+*   **Updating Cards**: Call [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378) to update an existing card's details (such as name, description, or due date), move it to a different list, or mark it as completed via the `due_complete` parameter.
+*   **Adding Attachments**: Call [attach_file_to_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L441) to upload a file to a card by sending its OpenClaw media URI (e.g., `media://inbound/archivo.png`) or its local absolute file path (limit: 10MB).
 
 ---
 
@@ -46,5 +47,5 @@ The Trello tools interface with the Trello API using configuration credentials.
 The following actions are sensitive and should require human confirmation or review in the agent client policy:
 *   Reading email bodies via `get_email_body_by_id`.
 *   Reading specific card details via `get_trello_card_by_id` if they contain confidential description/comment fields.
-*   Any write or update operation on Trello cards, specifically [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325) and [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378).
+*   Any write, update, or attachment operation on Trello cards, specifically [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325), [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378), and [attach_file_to_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L441).
 *   Any email operations that write or send emails (such as [write_email_to](file:///C:/Programming/Portafolio/local-utils-mcp/services/outlook.py#L311) in Outlook).
