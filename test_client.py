@@ -2,7 +2,7 @@ import asyncio
 from fastmcp import Client
 
 # Inicializa el cliente que se conecta al servidor local en ejecución
-client = Client("http://localhost:8000/mcp")
+client = Client("http://localhost:8000/sse")
 
 async def test_mcp_tools():
     async with client:

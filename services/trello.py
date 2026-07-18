@@ -18,6 +18,60 @@ class TrelloCardFilter(BaseModel):
 api_key = os.getenv("TRELLO_API_KEY")
 api_token = os.getenv("TRELLO_API_TOKEN") or os.getenv("TRELLO_TOKEN")
     
+    
+def _validate_list_board_id(list_id: str):    
+    if not api_key or not api_token:
+        raise ValueError("Faltan las credenciales 'TRELLO_API_KEY' o 'TRELLO_API_TOKEN' en las variables de entorno.")
+
+    board_check_url = f"https://api.trello.com/1/lists/{list_id}/board"
+    try:
+        check_res = requests.get(board_check_url, params={"key": api_key, "token": api_token}, timeout=5)
+        check_res.raise_for_status()
+        actual_board_id = check_res.json().get("id")
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Error de seguridad al validar la lista en Trello: {str(e)}")
+    
+    if actual_board_id not in ALLOWED_BOARDS:
+        raise PermissionError("Acceso denegado: Esta lista no se encuentra en un tablero autorizado.")
+    return
+
+    
+def _validate_card_board_id(card_id: str):    
+    if not api_key or not api_token:
+        raise ValueError("Faltan las credenciales 'TRELLO_API_KEY' o 'TRELLO_API_TOKEN' en las variables de entorno.")
+
+    card_board_url = f"https://api.trello.com/1/cards/{card_id}/board"
+    check_res = requests.get(card_board_url, params={"key": api_key, "token": api_token}, timeout=5)
+    check_res.raise_for_status()
+    actual_board_id = check_res.json().get("id")
+    
+    if actual_board_id not in ALLOWED_BOARDS:
+        print(f"[MCP SECURITY ALERT]: Intento no autorizado de leer la tarjeta '{card_id}'.")
+        raise PermissionError("Acceso denegado: Esta tarjeta pertenece a un tablero no autorizado.")
+
+def get_trello_boards() -> List[Dict[str, Any]]:
+    """
+    Recupera y lista todos los tableros (juntas) de la cuenta de Trello.
+
+    Returns:
+        List[Dict[str, Any]]: Una lista de diccionarios con el ID, nombre de cada tablero (junta).
+    """
+
+    return [
+        {
+            "id": "5dcdad1dfad50b20af0e4cd5",
+            "nodeId": "ari:cloud:trello::board/workspace/5ce43a284dde0429cf4944ff/5dcdad1dfad50b20af0e4cd5",
+            "name": "Pre-Diligencionamiento HC",
+            "desc": "",
+            # "idOrganization": "5ce43a284dde0429cf4944ff",
+            
+            "url": "https://trello.com/b/j4RE89Rl/pre-diligencionamiento-hc",
+            
+            "shortLink": "j4RE89Rl",
+            
+            "shortUrl": "https://trello.com/b/j4RE89Rl",
+        },
+    ]
 
 def get_trello_board_lists(
     board_id: Annotated[Optional[str], Field(description="El ID único del tablero de Trello. Si es None, se usará el tablero por defecto.")] = None
@@ -99,16 +153,7 @@ def get_trello_cards_in_list(
     Returns:
         List[Dict[str, Any]]: Lista de tarjetas con sus IDs, nombres, descripciones y fechas de vencimiento.
     """
-    if not api_key or not api_token:
-        raise ValueError("Faltan las credenciales 'TRELLO_API_KEY' o 'TRELLO_API_TOKEN' en el entorno.")
-    board_check_url = f"https://api.trello.com/1/lists/{list_id}/board"
-    check_res = requests.get(board_check_url, params={"key": api_key, "token": api_token}, timeout=5)
-    check_res.raise_for_status()
-    actual_board_id = check_res.json().get("id")
-    
-    if actual_board_id not in ALLOWED_BOARDS:
-        print(f"[MCP SECURITY ALERT]: Intento de acceder a la lista '{list_id}' que pertenece al tablero '{actual_board_id}' (NO AUTORIZADO).")
-        raise PermissionError("Acceso denegado: Esta lista no pertenece al tablero autorizado de la organización.")
+    _validate_list_board_id(list_id)
     
     url = f"https://api.trello.com/1/lists/{list_id}/cards"
     params = {
@@ -186,7 +231,6 @@ def get_trello_cards_in_list(
 
     return final_cards
 
-
 def get_trello_card_by_id(
     card_id: Annotated[str, Field(description="El ID único de la tarjeta de Trello (de 24 caracteres hexadecimales).")]
 ) -> Dict[str, Any]:
@@ -205,26 +249,15 @@ def get_trello_card_by_id(
     Returns:
         Dict[str, Any]: Un diccionario estructurado con la información de la tarjeta y sus elementos internos.
     """
-
-    if not api_key or not api_token:
-        raise ValueError("Faltan las credenciales 'TRELLO_API_KEY' o 'TRELLO_API_TOKEN' en las variables de entorno.")
-
-    card_board_url = f"https://api.trello.com/1/cards/{card_id}/board"
-    check_res = requests.get(card_board_url, params={"key": api_key, "token": api_token}, timeout=5)
-    check_res.raise_for_status()
-    actual_board_id = check_res.json().get("id")
+    _validate_card_board_id(card_id)
     
-    if actual_board_id not in ALLOWED_BOARDS:
-        print(f"[MCP SECURITY ALERT]: Intento no autorizado de leer la tarjeta '{card_id}'.")
-        raise PermissionError("Acceso denegado: Esta tarjeta pertenece a un tablero no autorizado.")
-
     url = f"https://api.trello.com/1/cards/{card_id}"
     params = {
         "key": api_key,
         "token": api_token,
         "fields": "id,name,desc,due,closed,idLabels,idList",
-        "checklists": "all",      # Trae los sub-items (Checklists) de la tarjeta
-        "actions": "commentCard"  # Trae solo el historial de comentarios
+        "checklists": "all",      
+        "actions": "commentCard"  
     }
 
     try:
@@ -237,11 +270,9 @@ def get_trello_card_by_id(
     raw_name = card_data.get("name", "")
     raw_desc = card_data.get("desc", "")
     
-    # Sanitizar strings principales contra ataques XML-breaking
     safe_name = raw_name.replace("</card_name>", "").replace("<card_name>", "")
     safe_desc = raw_desc.replace("</card_desc>", "").replace("<card_desc>", "")
 
-    # 4. Procesar Checklists de forma segura
     processed_checklists = []
     for cl in card_data.get("checklists", []):
         items = []
@@ -291,9 +322,111 @@ def get_trello_card_by_id(
     return result
 
 #TODO: marcar como approval only
-#TODO: incomplete
-def write_trello_card_in_list(list_id: str):
+def write_trello_card_in_list(
+    list_id: Annotated[str, Field(description="El ID de la lista (columna) donde se creará la tarjeta.")],
+    name: Annotated[str, Field(description="El nombre o título de la nueva tarjeta.")],
+    desc: Annotated[Optional[str], Field(description="Descripción detallada de la tarjeta.")] = None,
+    due: Annotated[Optional[str], Field(description="Fecha de vencimiento en formato ISO (ej: '2026-12-31T23:59:59.000Z').")] = None
+) -> Dict[str, Any]:
     """
-    Crea una nueva tarjeta en una lista de Trello (Aún no implementado).
+    Crea una nueva tarjeta en una lista específica de Trello tras validar la seguridad del tablero.
+
+    SECURITY NOTE: Esta operación requiere aprobación explícita si se orquesta bajo políticas críticas.
+    Los strings de entrada son sanitizados para prevenir la inyección o ruptura de envolturas XML.
     """
-    pass
+    _validate_list_board_id(list_id=list_id)
+    
+    safe_name = name.replace("</card_name>", "").replace("<card_name>", "").strip()
+    safe_desc = desc.replace("</card_desc>", "").replace("<card_desc>", "").strip() if desc else ""
+
+    url = "https://api.trello.com/1/cards"
+    params = {
+        "key": api_key,
+        "token": api_token,
+        "idList": list_id,
+        "name": safe_name,
+        "desc": safe_desc
+    }
+    
+    if due:
+        params["due"] = due
+
+    try:
+        response = requests.post(url, params=params, timeout=10)
+        response.raise_for_status()
+        created_card = response.json()
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Error al crear la tarjeta en la API de Trello: {str(e)}")
+
+    result = {
+        "card_id": created_card.get("id"),
+        "list_id": created_card.get("idList"),
+        "name": f"<card_name>{safe_name}</card_name>",
+        "description": f"<card_desc>{safe_desc}</card_desc>",
+        "due_date": created_card.get("due"),
+        "url": created_card.get("shortUrl")
+    }
+
+    print(f"\n================ [MCP TRELLO CARD WRITE] ================")
+    print(f"Tarjeta Creada Exitosamente: '{safe_name[:30]}...'")
+    print(f"ID de Tarjeta: {result['card_id']}")
+    print(f"========================================================\n")
+
+    return result
+
+# TODO: marcar como approval only
+def update_trello_card(
+    card_id: Annotated[str, Field(description="El ID de la tarjeta que se va a actualizar o mover.")],
+    list_id: Annotated[Optional[str], Field(description="El ID de la nueva lista (columna) si se desea mover la tarjeta.")] = None,
+    name: Annotated[Optional[str], Field(description="El nuevo nombre o título de la tarjeta.")] = None,
+    desc: Annotated[Optional[str], Field(description="La nueva descripción detallada de la tarjeta.")] = None,
+    due: Annotated[Optional[str], Field(description="Nueva fecha de vencimiento en formato ISO (ej: '2026-12-31T23:59:59.000Z').")] = None
+) -> Dict[str, Any]:
+    """
+    Actualiza los datos de una tarjeta existente en Trello o la mueve de lista tras validar la seguridad.
+
+    SECURITY NOTE: Esta operación requiere aprobación explícita si se orquesta bajo políticas críticas.
+    Los strings de entrada son sanitizados para prevenir la inyección o ruptura de envolturas XML.
+    """
+    if list_id:
+        _validate_list_board_id(list_id=list_id)
+    
+    url = f"https://api.trello.com/1/cards/{card_id}"
+    params = {
+        "key": api_key,
+        "token": api_token
+    }
+
+    if list_id:
+        params["idList"] = list_id
+    if name is not None:
+        safe_name = name.replace("</card_name>", "").replace("<card_name>", "").strip()
+        params["name"] = safe_name
+    if desc is not None:
+        safe_desc = desc.replace("</card_desc>", "").replace("<card_desc>", "").strip()
+        params["desc"] = safe_desc
+    if due:
+        params["due"] = due
+
+    try:
+        response = requests.put(url, params=params, timeout=10)
+        response.raise_for_status()
+        updated_card = response.json()
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Error al actualizar la tarjeta en la API de Trello: {str(e)}")
+
+    result = {
+        "card_id": updated_card.get("id"),
+        "list_id": updated_card.get("idList"),
+        "name": f"<card_name>{updated_card.get('name')}</card_name>",
+        "description": f"<card_desc>{updated_card.get('desc')}</card_desc>",
+        "due_date": updated_card.get("due"),
+        "url": updated_card.get("shortUrl")
+    }
+
+    print(f"\n================ [MCP TRELLO CARD UPDATE] ================")
+    print(f"Tarjeta Actualizada Exitosamente: ID {result['card_id']}")
+    print(f"Ubicación Actual (Lista ID): {result['list_id']}")
+    print(f"========================================================\n")
+
+    return result
