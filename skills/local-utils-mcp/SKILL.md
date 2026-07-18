@@ -2,11 +2,7 @@
 name: local-utils-mcp
 description: >-
   Provides tools to access local Windows application services, including listing Outlook 
-  accounts/mails and querying Trello board lists or cards.
-requires:
-  env:
-    - TRELLO_API_KEY
-    - TRELLO_API_TOKEN
+  accounts/mails/calendar events and querying Trello board lists or cards.
 ---
 
 # Local Windows Utilities & Trello Integration Skill
@@ -40,12 +36,37 @@ The Trello tools interface with the Trello API using configuration credentials.
 *   **Updating Cards**: Call [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378) to update an existing card's details (such as name, description, or due date), move it to a different list, or mark it as completed via the `due_complete` parameter.
 *   **Adding Attachments**: Call [attach_file_to_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L441) to upload a file to a card by sending its OpenClaw media URI (e.g., `media://inbound/archivo.png`) or its local absolute file path (limit: 10MB).
 
+### Crucial Operation Rules:
+*   **Do Not Ask for IDs**: The agent must never ask the user for board IDs, list IDs, or card IDs. Instead, use the tools at hand to query, list, and find the appropriate IDs. For example:
+    *   If the user says "move task X", do not ask for the destination `list_id`. Call [get_trello_board_lists](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L76) to retrieve the lists/columns and present the list names to the user to choose from.
+    *   Find card IDs by querying lists using [get_trello_cards_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L131) and matching the card's name.
+*   **Card Quality & Completeness**: When creating a new task/card via [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325):
+    *   The card `name` must be short but highly descriptive.
+    *   The card `desc` (description) must explain what the task is about in a brief bulleted list (MAXIMUM 5 bullet points).
+    *   Each card MUST have a due date (`due`).
+    *   If any of these attributes (descriptive name, summary description, or due date) are missing from the user's request, the agent **MUST prompt the user** for the missing details before calling the tool. Do not create raw or insipid tasks.
+*   **Caching IDs (Conversation Memory)**: The agent may cache/memorize the IDs and names of boards and lists within the conversation context, since they do not change frequently. This avoids redundant calls to discover them.
+
 ---
 
-## 3. Human Approval Requirements
+## 3. Outlook Calendar Operations
+
+The Calendar tools interact with the Outlook calendar using Pydantic DTO models to query, create, and update events.
+
+### Guidelines for the Agent:
+*   **Listing & Filtering**: Call [list_calendar_events](file:///C:/Programming/Portafolio/local-utils-mcp/services/outlook.py#L495) to read the calendar. Provide date ranges and structured filters (using `CalendarFilterDto`) to filter events by `subject`, `location`, `body`, `categories`, `busy_status`, or `sensitivity`.
+*   **Creating Events**: Call [create_calendar_event](file:///C:/Programming/Portafolio/local-utils-mcp/services/outlook.py#L628) to schedule new appointments or meetings. You can configure title, start time, duration, location, reminders, privacy/sensitivity, availability status (`busy_status`), and invite attendees. Set `is_meeting` to `True` to send invite emails.
+    *   **Context Gathering**: Before creating an event, the agent **MUST retrieve relevant information** to write a brief but descriptive body for the event description/reminder and choose an appropriate, professional title (`subject`) that reflects the event's purpose.
+    *   **Recurrence Reminder**: When scheduling, the agent **MUST remind the user** that they have the option to set the event as recurring (frequently repeating) if they wish.
+*   **Editing Events**: Call [edit_calendar_event](file:///C:/Programming/Portafolio/local-utils-mcp/services/outlook.py#L737) using the `entry_id` of the appointment. You can update any parameter by specifying it in the `updates` (type `UpdateAppointmentDto`).
+
+---
+
+## 4. Human Approval Requirements
 
 The following actions are sensitive and should require human confirmation or review in the agent client policy:
 *   Reading email bodies via `get_email_body_by_id`.
 *   Reading specific card details via `get_trello_card_by_id` if they contain confidential description/comment fields.
 *   Any write, update, or attachment operation on Trello cards, specifically [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325), [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378), and [attach_file_to_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L441).
-*   Any email operations that write or send emails (such as [write_email_to](file:///C:/Programming/Portafolio/local-utils-mcp/services/outlook.py#L311) in Outlook).
+*   Any email operations that write or send emails (such as [write_email_to](file:///C:/Programming/Portafolio/local-utils-mcp/services/outlook.py#L328) in Outlook).
+*   Any write or update operations on Calendar appointments/meetings, specifically [create_calendar_event](file:///C:/Programming/Portafolio/local-utils-mcp/services/outlook.py#L628) and [edit_calendar_event](file:///C:/Programming/Portafolio/local-utils-mcp/services/outlook.py#L737).
