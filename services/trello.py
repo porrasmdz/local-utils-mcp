@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 import requests
 from typing import List, Dict, Any, Literal, Annotated, Optional
 
-ALLOWED_BOARDS = ["5dcdad1dfad50b20af0e4cd5"]
+ALLOWED_BOARDS = ["5dcdad1dfad50b20af0e4cd5", "673b9bfaa279ac6f43195dba" ]
 class TrelloCardFilter(BaseModel):
     field: Literal["name", "desc", "due", "is_archived"] = Field(
         ..., description="El campo de la tarjeta por el cual filtrar."

@@ -7,5 +7,7 @@ requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4>=4.15.0",
     "fastmcp[apps]>=3.4.4",
+    "httpx>=0.28.1",
+    "msal>=1.37.0",
     "requests>=2.34.2",
 ]
