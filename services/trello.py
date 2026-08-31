@@ -58,21 +58,51 @@ def get_trello_boards() -> List[Dict[str, Any]]:
         List[Dict[str, Any]]: Una lista de diccionarios con el ID, nombre de cada tablero (junta).
     """
 
-    return [
-        {
-            "id": "5dcdad1dfad50b20af0e4cd5",
-            "nodeId": "ari:cloud:trello::board/workspace/5ce43a284dde0429cf4944ff/5dcdad1dfad50b20af0e4cd5",
-            "name": "Pre-Diligencionamiento HC",
-            "desc": "",
-            # "idOrganization": "5ce43a284dde0429cf4944ff",
-            
-            "url": "https://trello.com/b/j4RE89Rl/pre-diligencionamiento-hc",
-            
-            "shortLink": "j4RE89Rl",
-            
-            "shortUrl": "https://trello.com/b/j4RE89Rl",
-        },
-    ]
+    if not api_key or not api_token:
+        raise ValueError("Faltan las credenciales 'TRELLO_API_KEY' o 'TRELLO_API_TOKEN' en las variables de entorno.")
+
+    url = "https://api.trello.com/1/members/me/boards"
+    params = {
+        "key": api_key,
+        "token": api_token,
+        "filter": "all",
+        "fields": "id,name,desc,closed,idOrganization,url,shortLink,shortUrl"
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        raw_boards = response.json()
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Error al conectar con la API de Trello: {str(e)}")
+
+    allowed_boards = []
+    for board in raw_boards:
+        if board.get("id") not in ALLOWED_BOARDS:
+            continue
+
+        raw_name = board.get("name", "")
+        raw_desc = board.get("desc", "")
+        safe_name = raw_name.replace("</board_name>", "").replace("<board_name>", "").strip()
+        safe_desc = raw_desc.replace("</board_desc>", "").replace("<board_desc>", "").strip()
+
+        allowed_boards.append({
+            "id": board.get("id"),
+            "board_id": board.get("id"),
+            "name": f"<board_name>{safe_name}</board_name>",
+            "description": f"<board_desc>{safe_desc}</board_desc>",
+            "is_archived": board.get("closed", False),
+            "organization_id": board.get("idOrganization"),
+            "url": board.get("url"),
+            "shortLink": board.get("shortLink"),
+            "shortUrl": board.get("shortUrl"),
+        })
+
+    print(f"\n================ [MCP TRELLO BOARDS] ================")
+    print(f"Tableros autorizados encontrados: {len(allowed_boards)}")
+    print(f"======================================================\n")
+
+    return allowed_boards
 
 def get_trello_board_lists(
     board_id: Annotated[Optional[str], Field(description="El ID único del tablero de Trello. Si es None, se usará el tablero por defecto.")] = None
