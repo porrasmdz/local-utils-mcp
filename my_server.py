@@ -18,4 +18,4 @@ mcp = FastMCP( "Local Windows Utils",
 ) 
 
 if __name__ == "__main__":
-    mcp.run(transport="sse", port=8007)
+    mcp.run(transport="stdio")
