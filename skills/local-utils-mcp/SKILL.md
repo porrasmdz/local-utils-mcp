@@ -30,16 +30,18 @@ The Trello tools interface with the Trello API using configuration credentials.
 
 ### Guidelines for the Agent:
 *   **Columns/Lists**: Call [get_trello_board_lists](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L76) to discover columns on the target board. If `board_id` is omitted or invalid, it redirects to the default allowed board.
-*   **Querying Cards**: Call [get_trello_cards_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L131) with a list ID. You can apply filters (e.g., searching by card name or status) and sorting parameters.
-*   **Card Details**: Call [get_trello_card_by_id](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L234) to retrieve comments, checklists, descriptions, and due dates for a specific card.
-*   **Creating Cards**: Call [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325) to create a new card in a specific list, providing a name, description, and optional due date.
-*   **Updating Cards**: Call [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378) to update an existing card's details (such as name, description, or due date), move it to a different list, or mark it as completed via the `due_complete` parameter.
+*   **Board Members**: Call `get_trello_board_members` when you need to resolve a person's name or username to a Trello member ID before assigning a card.
+*   **Querying Cards**: Call [get_trello_cards_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L131) with a list ID. Returned `TrelloGeneralCard` objects include `assigned_user`, fetched efficiently in the same Trello request. Use filters with `field="assigned_user"` and `operator="LIKE"` for names/usernames, or `field="assigned_user_id"` and `operator="="` for exact member IDs.
+*   **Card Details**: Call [get_trello_card_by_id](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L234) to retrieve comments, checklists, full descriptions, due dates, and assigned users. You can pass comma-separated card IDs to fetch details in parallel 5 at a time.
+*   **Creating Cards**: Call [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325) to create a new card in a specific list, providing a name, description, optional due date, and optional `assigned_user` member ID(s). Do not pass human names to `assigned_user`; resolve IDs first.
+*   **Updating Cards**: Call [update_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L378) to update an existing card's details (such as name, description, due date, or assigned users), move it to a different list, or mark it as completed via the `due_complete` parameter. `assigned_user=None` leaves assignments unchanged; `assigned_user=""` clears assignments; otherwise pass comma-separated member IDs.
 *   **Adding Attachments**: Call [attach_file_to_trello_card](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L441) to upload a file to a card by sending its OpenClaw media URI (e.g., `media://inbound/archivo.png`) or its local absolute file path (limit: 10MB).
 
 ### Crucial Operation Rules:
 *   **Do Not Ask for IDs**: The agent must never ask the user for board IDs, list IDs, or card IDs. Instead, use the tools at hand to query, list, and find the appropriate IDs. For example:
     *   If the user says "move task X", do not ask for the destination `list_id`. Call [get_trello_board_lists](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L76) to retrieve the lists/columns and present the list names to the user to choose from.
     *   Find card IDs by querying lists using [get_trello_cards_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L131) and matching the card's name.
+    *   Find Trello member IDs by calling `get_trello_board_members` or by reading `assigned_user` from cards. Never ask the user for member IDs if you can discover them.
 *   **Card Quality & Completeness**: When creating a new task/card via [write_trello_card_in_list](file:///C:/Programming/Portafolio/local-utils-mcp/services/trello.py#L325):
     *   The card `name` must be short but highly descriptive.
     *   The card `desc` (description) must explain what the task is about in a brief bulleted list (MAXIMUM 5 bullet points).
