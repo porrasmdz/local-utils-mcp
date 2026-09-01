@@ -46,6 +46,11 @@ class TrelloAssignedUser(BaseModel):
     initials: Optional[str] = Field(None, description="Iniciales del miembro asignado.")
 
 
+class TrelloUser(BaseModel):
+    user_id: Optional[str] = Field(None, description="El ID de miembro de Trello.")
+    name: str = Field(..., description="Nombre visible del miembro de Trello.")
+
+
 class TrelloGeneralCard(BaseModel):
     card_id: Optional[str] = Field(None, description="El ID único de la tarjeta.")
     list_id: Optional[str] = Field(None, description="El ID de la lista donde está la tarjeta.")
@@ -156,6 +161,12 @@ def _build_assigned_users(card_data: Dict[str, Any]) -> List[TrelloAssignedUser]
         TrelloAssignedUser(user_id=member_id)
         for member_id in card_data.get("idMembers", [])
     ]
+
+
+def _build_trello_user(member_data: Dict[str, Any]) -> TrelloUser:
+    user_id = member_data.get("id")
+    name = member_data.get("fullName") or user_id or ""
+    return TrelloUser(user_id=user_id, name=name)
 
 
 def _build_trello_general_card(card_data: Dict[str, Any]) -> TrelloGeneralCard:
@@ -381,16 +392,16 @@ def get_trello_board_lists(
 
 def get_trello_board_members(
     board_id: Annotated[Optional[str], Field(description="El ID único del tablero de Trello. Si es None o no está autorizado, se usará el tablero por defecto.")] = None
-) -> List[TrelloAssignedUser]:
+) -> List[TrelloUser]:
     """
     Lista los miembros de un tablero autorizado de Trello para que el agente pueda resolver
-    nombres o usernames a IDs de miembro antes de asignar tarjetas.
+    nombres a IDs de miembro antes de asignar tarjetas.
 
     Args:
         board_id: El ID único del tablero de Trello. Si es None o no está autorizado, se usa el tablero por defecto.
 
     Returns:
-        List[TrelloAssignedUser]: Miembros del tablero con user_id, username, full_name e initials.
+        List[TrelloUser]: Miembros del tablero con solo user_id y name.
     """
     target_board_id = board_id
     if target_board_id is None or target_board_id not in ALLOWED_BOARDS:
@@ -404,7 +415,7 @@ def get_trello_board_members(
     params = {
         "key": api_key,
         "token": api_token,
-        "fields": "id,username,fullName,initials"
+        "fields": "id,fullName"
     }
 
     try:
@@ -414,15 +425,7 @@ def get_trello_board_members(
     except requests.exceptions.RequestException as e:
         raise RuntimeError(f"Error al conectar con la API de Trello: {str(e)}")
 
-    members = [
-        TrelloAssignedUser(
-            user_id=member.get("id"),
-            username=member.get("username"),
-            full_name=member.get("fullName"),
-            initials=member.get("initials"),
-        )
-        for member in raw_members
-    ]
+    members = [_build_trello_user(member) for member in raw_members]
 
     print(f"\n================ [MCP TRELLO BOARD MEMBERS] ================")
     print(f"Tablero consultado: {target_board_id}")
@@ -430,6 +433,15 @@ def get_trello_board_members(
     print(f"============================================================\n")
 
     return members
+
+
+def get_trello_users(
+    board_id: Annotated[Optional[str], Field(description="El ID unico del tablero de Trello. Si es None o no esta autorizado, se usara el tablero por defecto.")] = None
+) -> List[TrelloUser]:
+    """
+    Lista usuarios de un tablero autorizado de Trello con salida minima: user_id y name.
+    """
+    return get_trello_board_members(board_id)
 
 
 def get_trello_cards_in_list(

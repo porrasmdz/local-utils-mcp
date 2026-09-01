@@ -182,13 +182,11 @@ class TrelloCardBatchTest(unittest.TestCase):
         self.assertEqual(params["member_fields"], "id,username,fullName,initials")
         self.assertIn("idMembers", params["fields"])
 
-    def test_board_members_returns_assigned_user_models(self):
+    def test_board_members_returns_minimal_user_models(self):
         response = Mock()
         response.json.return_value = [{
             "id": "member-1",
-            "username": "apomen",
             "fullName": "Andres Pomen",
-            "initials": "AP",
         }]
 
         with patch.object(trello, "api_key", "key"):
@@ -196,10 +194,38 @@ class TrelloCardBatchTest(unittest.TestCase):
                 with patch.object(trello.requests, "get", return_value=response) as get:
                     result = trello.get_trello_board_members()
 
-        self.assertEqual(get.call_args.kwargs["params"]["fields"], "id,username,fullName,initials")
+        self.assertEqual(get.call_args.kwargs["params"]["fields"], "id,fullName")
         self.assertEqual(len(result), 1)
-        self.assertIsInstance(result[0], trello.TrelloAssignedUser)
+        self.assertIsInstance(result[0], trello.TrelloUser)
         self.assertEqual(result[0].user_id, "member-1")
+        self.assertEqual(result[0].name, "Andres Pomen")
+        self.assertNotIn("username", result[0].model_dump())
+
+    def test_board_member_name_falls_back_to_user_id(self):
+        response = Mock()
+        response.json.return_value = [{
+            "id": "member-1",
+            "fullName": "",
+        }]
+
+        with patch.object(trello, "api_key", "key"):
+            with patch.object(trello, "api_token", "token"):
+                with patch.object(trello.requests, "get", return_value=response):
+                    result = trello.get_trello_board_members()
+
+        self.assertEqual(result[0].model_dump(), {
+            "user_id": "member-1",
+            "name": "member-1",
+        })
+
+    def test_trello_users_delegates_to_board_members(self):
+        users = [trello.TrelloUser(user_id="member-1", name="Andres Pomen")]
+
+        with patch.object(trello, "get_trello_board_members", return_value=users) as get_members:
+            result = trello.get_trello_users("board-1")
+
+        get_members.assert_called_once_with("board-1")
+        self.assertIs(result, users)
 
     def test_write_card_can_assign_users(self):
         response = Mock()
