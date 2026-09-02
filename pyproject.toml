@@ -9,5 +9,6 @@ dependencies = [
     "fastmcp[apps]>=3.4.4",
     "httpx>=0.28.1",
     "msal>=1.37.0",
+    "openpyxl>=3.1.4",
     "requests>=2.34.2",
 ]
