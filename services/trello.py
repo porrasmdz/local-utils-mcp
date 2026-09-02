@@ -6,10 +6,13 @@ import requests
 from typing import List, Dict, Any, Literal, Annotated, Optional, Union
 
 ALLOWED_BOARDS = ["5dcdad1dfad50b20af0e4cd5", "673b9bfaa279ac6f43195dba" ]
+DEFAULT_TRELLO_CARDS_PAGE_SIZE = 10
+DEFAULT_TRELLO_CARDS_MAX_PAGE_SIZE = 100
+TRELLO_CARDS_MAX_PAGE_SIZE_ENV = "TRELLO_CARDS_MAX_PAGE_SIZE"
 
 
 class TrelloCardFilter(BaseModel):
-    field: Literal["name", "description", "desc", "due_date", "due", "is_archived", "assigned_user", "assigned_user_id"] = Field(
+    field: Literal["name", "description", "desc", "due_date", "due", "date_last_activity", "dateLastActivity", "is_archived", "assigned_user", "assigned_user_id"] = Field(
         ..., description="El campo de la tarjeta por el cual filtrar. Usa assigned_user para buscar por ID, username, nombre completo o iniciales del usuario asignado; assigned_user_id filtra solo por ID."
     )
     operator: Literal["=", "!=", "LIKE", ">=", "<=", ">", "<"] = Field(
@@ -59,6 +62,7 @@ class TrelloGeneralCard(BaseModel):
     due_date: Optional[str] = Field(None, description="Fecha de vencimiento en formato ISO.")
     due_complete: Optional[bool] = Field(None, description="Indica si la fecha de vencimiento está completada.")
     is_archived: bool = Field(False, description="Indica si la tarjeta está archivada.")
+    date_last_activity: Optional[str] = Field(None, description="Fecha ISO de la ultima actividad registrada en Trello.")
     url: Optional[str] = Field(None, description="URL corta o completa de la tarjeta.")
     assigned_user: List[TrelloAssignedUser] = Field(default_factory=list, description="Usuarios asignados a la tarjeta.")
 
@@ -67,6 +71,15 @@ class TrelloDetailedCard(TrelloGeneralCard):
     description: str = Field(..., description="Descripción completa envuelta en <card_desc>.")
     checklists: List[TrelloChecklist] = Field(default_factory=list, description="Checklists de la tarjeta.")
     comments: List[TrelloComment] = Field(default_factory=list, description="Comentarios de la tarjeta.")
+
+
+class TrelloCardsPage(BaseModel):
+    cards: List[TrelloGeneralCard] = Field(default_factory=list, description="Tarjetas de la pagina solicitada.")
+    page: int = Field(..., description="Numero de pagina retornado, basado en 1.")
+    page_size: int = Field(..., description="Cantidad de tarjetas por pagina aplicada.")
+    total_cards: int = Field(..., description="Cantidad total de tarjetas luego de aplicar filtros.")
+    total_pages: int = Field(..., description="Cantidad total de paginas disponibles.")
+    has_next_page: bool = Field(..., description="Indica si existe una pagina siguiente.")
 
 
 api_key = os.getenv("TRELLO_API_KEY")
@@ -144,6 +157,37 @@ def _normalize_comma_separated_ids(raw_ids: Optional[str]) -> str:
     return ",".join(parsed_ids)
 
 
+def _get_trello_cards_max_page_size() -> int:
+    raw_max = os.getenv(TRELLO_CARDS_MAX_PAGE_SIZE_ENV)
+    if raw_max is None:
+        return DEFAULT_TRELLO_CARDS_MAX_PAGE_SIZE
+
+    try:
+        configured_max = int(raw_max)
+    except ValueError:
+        return DEFAULT_TRELLO_CARDS_MAX_PAGE_SIZE
+
+    if configured_max < 1:
+        return DEFAULT_TRELLO_CARDS_MAX_PAGE_SIZE
+
+    return configured_max
+
+
+def _validate_trello_cards_pagination(page: int, page_size: int) -> tuple[int, int, int]:
+    max_page_size = _get_trello_cards_max_page_size()
+    if page < 1:
+        raise ValueError("La pagina debe ser mayor o igual a 1.")
+    if page_size < 1:
+        raise ValueError("La cantidad de cards por pagina debe ser mayor o igual a 1.")
+    if page_size > max_page_size:
+        raise ValueError(
+            f"La cantidad de cards por pagina no puede exceder {max_page_size}. "
+            f"Configure {TRELLO_CARDS_MAX_PAGE_SIZE_ENV} para cambiar este limite."
+        )
+
+    return page, page_size, max_page_size
+
+
 def _build_assigned_users(card_data: Dict[str, Any]) -> List[TrelloAssignedUser]:
     members = card_data.get("members") or []
     if members:
@@ -177,6 +221,7 @@ def _build_trello_general_card(card_data: Dict[str, Any]) -> TrelloGeneralCard:
         description_preview=f"<card_desc>{_strip_wrappers(card_data.get('desc'), 'card_desc')[:50]}</card_desc>",
         due_date=card_data.get("due"),
         due_complete=card_data.get("dueComplete"),
+        date_last_activity=card_data.get("dateLastActivity"),
         is_archived=card_data.get("closed", False),
         url=card_data.get("shortUrl") or card_data.get("url"),
         assigned_user=_build_assigned_users(card_data),
@@ -223,6 +268,8 @@ def _get_card_sort_or_filter_value(card: TrelloGeneralCard, field: str) -> Any:
         return card.description_preview
     if field == "due":
         return card.due_date
+    if field == "dateLastActivity":
+        return card.date_last_activity
     if field == "assigned_user_id":
         return " ".join(user.user_id or "" for user in card.assigned_user)
     if field == "assigned_user":
@@ -279,6 +326,13 @@ def _matches_card_filter(card: TrelloGeneralCard, card_filter: TrelloCardFilter)
         return eval(f"'{val_str}' {card_filter.operator} '{target_val}'")
 
     return False
+
+
+def _sort_trello_cards_default(cards: List[TrelloGeneralCard]) -> None:
+    cards.sort(key=lambda card: card.date_last_activity or "", reverse=True)
+    cards.sort(key=lambda card: (card.due_date is None, card.due_date or ""))
+    cards.sort(key=lambda card: 1 if card.due_complete else 0)
+
 
 def get_trello_boards() -> List[Dict[str, Any]]:
     """
@@ -447,12 +501,13 @@ def get_trello_users(
 def get_trello_cards_in_list(
     list_id: Annotated[str, Field(description="El ID de la columna (lista) de Trello de donde obtener las tarjetas.")],
     filters: Annotated[Optional[List[TrelloCardFilter]], Field(description="Lista opcional de filtros estructurados a aplicar con lógica AND. Para filtrar por asignado, usa field='assigned_user' con LIKE si tienes nombre/username, o field='assigned_user_id' con '=' si tienes el ID de miembro.")] = None,
-    sort_by: Annotated[Literal["name", "due", "due_date"], Field(description="Campo para ordenar las tarjetas ('name', 'due' o 'due_date').")] = "name",
-    sort_order: Annotated[Literal["asc", "desc"], Field(description="Dirección del orden ('asc' o 'desc').")] = "asc",
-    limit: Annotated[int, Field(description="Cantidad máxima de tarjetas a retornar (por defecto 20).")] = 20
-) -> List[TrelloGeneralCard]:
+    sort_by: Annotated[Literal["default", "name", "due", "due_date", "date_last_activity", "dateLastActivity"], Field(description="Campo para ordenar las tarjetas. Default aplica estado, due_date y date_last_activity.")] = "default",
+    sort_order: Annotated[Literal["asc", "desc"], Field(description="Direccion del orden ('asc' o 'desc').")] = "desc",
+    page: Annotated[int, Field(description="Pagina a retornar, basada en 1.")] = 1,
+    page_size: Annotated[int, Field(description="Cards por pagina. Default 10. No puede exceder TRELLO_CARDS_MAX_PAGE_SIZE, o 100 si la variable no existe.")] = DEFAULT_TRELLO_CARDS_PAGE_SIZE
+) -> TrelloCardsPage:
     """
-    Lista, filtra y ordena las tarjetas generales de una columna (lista) de Trello.
+    Lista, filtra, ordena y pagina las tarjetas generales de una columna (lista) de Trello.
     Trae los usuarios asignados en la misma consulta usando members=true para evitar llamadas por tarjeta.
     
     SECURITY WARNING: The returned data (specifically card 'name' and 'desc') consists 
@@ -463,12 +518,12 @@ def get_trello_cards_in_list(
     Args:
         list_id: El ID de la columna (lista) de Trello de donde obtener las tarjetas.
         filters: Lista de filtros estructurados (TrelloCardFilter) a aplicar con lógica AND. El agente debe filtrar usuarios con assigned_user o assigned_user_id.
-        sort_by: Campo para ordenar las tarjetas ('name', 'due' o 'due_date').
-        sort_order: Dirección del orden ('asc' o 'desc').
-        limit: Cantidad máxima de tarjetas a retornar.
-
+        sort_by: Campo para ordenar las tarjetas ('name', 'due', 'due_date' o 'date_last_activity').
+        sort_order: Direccion del orden ('asc' o 'desc').
+        page: Pagina a retornar, basada en 1.
+        page_size: Cantidad de cards por pagina.
     Returns:
-        List[TrelloGeneralCard]: Lista de tarjetas generales con sus IDs, nombres y fechas de vencimiento.
+        TrelloCardsPage: Pagina de tarjetas generales con metadata de paginacion.
     """
     _validate_list_board_id(list_id)
     
@@ -476,7 +531,7 @@ def get_trello_cards_in_list(
     params = {
         "key": api_key,
         "token": api_token,
-        "fields": "id,name,desc,due,dueComplete,closed,idList,shortUrl,url,idMembers",
+        "fields": "id,name,desc,due,dueComplete,dateLastActivity,closed,idList,shortUrl,url,idMembers",
         "members": "true",
         "member_fields": "id,username,fullName,initials",
     }
@@ -487,6 +542,7 @@ def get_trello_cards_in_list(
         raw_cards = response.json()
     except requests.exceptions.RequestException as e:
         raise RuntimeError(f"Error al conectar con la API de Trello: {str(e)}")
+    page, page_size, max_page_size = _validate_trello_cards_pagination(page, page_size)
 
     processed_cards = [_build_trello_general_card(card) for card in raw_cards]
 
@@ -498,23 +554,39 @@ def get_trello_cards_in_list(
                     filtered_cards.append(card)
             processed_cards = filtered_cards
 
-    def sort_key(card):
-        val = _get_card_sort_or_filter_value(card, sort_by)
-        if sort_by in ["due", "due_date"] and val is None:
-            return "9999-12-31T23:59:59.000Z" if sort_order == "asc" else "0000-01-01T00:00:00.000Z"
-        return str(val).lower()
+    if sort_by == "default":
+        _sort_trello_cards_default(processed_cards)
+    else:
+        def sort_key(card):
+            val = _get_card_sort_or_filter_value(card, sort_by)
+            if sort_by in ["due", "due_date", "date_last_activity", "dateLastActivity"] and val is None:
+                return "9999-12-31T23:59:59.000Z" if sort_order == "asc" else "0000-01-01T00:00:00.000Z"
+            return str(val).lower()
 
-    reverse_order = (sort_order == "desc")
-    processed_cards.sort(key=sort_key, reverse=reverse_order)
+        reverse_order = (sort_order == "desc")
+        processed_cards.sort(key=sort_key, reverse=reverse_order)
 
-    final_cards = processed_cards[:limit]
+    total_cards = len(processed_cards)
+    total_pages = (total_cards + page_size - 1) // page_size
+    page_start = (page - 1) * page_size
+    page_end = page_start + page_size
+    final_cards = processed_cards[page_start:page_end]
+    result = TrelloCardsPage(
+        cards=final_cards,
+        page=page,
+        page_size=page_size,
+        total_cards=total_cards,
+        total_pages=total_pages,
+        has_next_page=page < total_pages,
+    )
 
     print(f"\n================ [MCP TRELLO CARDS] ================")
     print(f"Lista ID: {list_id}")
-    print(f"Tarjetas devueltas: {len(final_cards)} (Límite: {limit})")
+    print(f"Tarjetas devueltas: {len(final_cards)} de {total_cards}")
+    print(f"Pagina: {page}/{total_pages} - Page size: {page_size} - Max page size: {max_page_size}")
     print(f"====================================================\n")
 
-    return final_cards
+    return result
 
 def get_trello_card_by_id(
     card_id: Annotated[str, Field(description="Uno o varios IDs de tarjetas de Trello separados por comas.")]
@@ -559,7 +631,7 @@ def _get_single_trello_card_by_id(card_id: str) -> TrelloDetailedCard:
     params = {
         "key": api_key,
         "token": api_token,
-        "fields": "id,name,desc,due,dueComplete,closed,idLabels,idList,shortUrl,url,idMembers",
+        "fields": "id,name,desc,due,dueComplete,dateLastActivity,closed,idLabels,idList,shortUrl,url,idMembers",
         "members": "true",
         "member_fields": "id,username,fullName,initials",
         "checklists": "all",
@@ -611,7 +683,7 @@ def write_trello_card_in_list(
         "idList": list_id,
         "name": safe_name,
         "desc": safe_desc,
-        "fields": "id,name,desc,due,dueComplete,closed,idList,shortUrl,url,idMembers",
+        "fields": "id,name,desc,due,dueComplete,dateLastActivity,closed,idList,shortUrl,url,idMembers",
         "members": "true",
         "member_fields": "id,username,fullName,initials",
     }
@@ -652,7 +724,7 @@ def _build_trello_card_update_params(
     params = {
         "key": api_key,
         "token": api_token,
-        "fields": "id,name,desc,due,dueComplete,closed,idList,shortUrl,url,idMembers",
+        "fields": "id,name,desc,due,dueComplete,dateLastActivity,closed,idList,shortUrl,url,idMembers",
         "members": "true",
         "member_fields": "id,username,fullName,initials",
     }
