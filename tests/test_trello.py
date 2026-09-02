@@ -385,44 +385,57 @@ class TrelloCardBatchTest(unittest.TestCase):
         cards_response.json.return_value = [
             {
                 "id": "overdue",
+                "idList": "list-1",
                 "idMembers": ["member-1"],
                 "due": "2026-01-01T00:00:00.000Z",
                 "dueComplete": False,
             },
             {
                 "id": "pending",
+                "idList": "list-1",
                 "idMembers": ["member-1"],
                 "due": "2999-01-01T00:00:00.000Z",
                 "dueComplete": False,
             },
             {
                 "id": "pending-no-due",
+                "idList": "list-2",
                 "idMembers": ["member-1"],
                 "due": None,
                 "dueComplete": False,
             },
             {
                 "id": "completed",
+                "idList": "list-2",
                 "idMembers": ["member-1"],
                 "due": "2026-01-01T00:00:00.000Z",
                 "dueComplete": True,
             },
             {
                 "id": "not-assigned",
+                "idList": "list-1",
                 "idMembers": ["member-2"],
                 "due": "2026-01-01T00:00:00.000Z",
                 "dueComplete": False,
             },
         ]
+        lists_response = Mock()
+        lists_response.json.return_value = [
+            {"id": "list-1", "name": "Doing"},
+            {"id": "list-2", "name": "Done"},
+        ]
 
         with patch.object(trello, "api_key", "key"):
             with patch.object(trello, "api_token", "token"):
-                with patch.object(trello.requests, "get", side_effect=[boards_response, cards_response]) as get:
+                with patch.object(trello.requests, "get", side_effect=[boards_response, lists_response, cards_response]) as get:
                     result = trello.get_trello_boards(user_id=" member-1 ")
 
-        self.assertEqual(get.call_count, 2)
-        self.assertEqual(get.call_args_list[1].args[0], f"https://api.trello.com/1/boards/{trello.ALLOWED_BOARDS[0]}/cards")
-        self.assertEqual(get.call_args_list[1].kwargs["params"]["filter"], "open")
+        self.assertEqual(get.call_count, 3)
+        self.assertEqual(get.call_args_list[1].args[0], f"https://api.trello.com/1/boards/{trello.ALLOWED_BOARDS[0]}/lists")
+        self.assertEqual(get.call_args_list[1].kwargs["params"]["fields"], "id,name")
+        self.assertEqual(get.call_args_list[2].args[0], f"https://api.trello.com/1/boards/{trello.ALLOWED_BOARDS[0]}/cards")
+        self.assertEqual(get.call_args_list[2].kwargs["params"]["filter"], "open")
+        self.assertIn("idList", get.call_args_list[2].kwargs["params"]["fields"])
         self.assertEqual(len(result), 1)
         self.assertIsInstance(result[0], trello.TrelloBoardSummary)
         self.assertEqual(result[0].board_id, trello.ALLOWED_BOARDS[0])
@@ -431,6 +444,15 @@ class TrelloCardBatchTest(unittest.TestCase):
         self.assertEqual(result[0].pending_cards, 2)
         self.assertEqual(result[0].completed_cards, 1)
         self.assertEqual(result[0].total_assigned_cards, 4)
+        self.assertEqual([item.list_id for item in result[0].lists], ["list-1", "list-2"])
+        self.assertEqual([item.name for item in result[0].lists], ["<list_name>Doing</list_name>", "<list_name>Done</list_name>"])
+        self.assertEqual(
+            [
+                (item.overdue_cards, item.pending_cards, item.completed_cards, item.total_assigned_cards)
+                for item in result[0].lists
+            ],
+            [(1, 1, 0, 2), (0, 1, 1, 2)],
+        )
 
     def test_get_trello_boards_requires_user_id(self):
         with self.assertRaisesRegex(ValueError, "user_id"):

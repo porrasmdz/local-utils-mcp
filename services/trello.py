@@ -93,6 +93,15 @@ class TrelloCardsCountResult(BaseModel):
     total_cards: int = Field(..., description="Cantidad total de cards en todas las listas solicitadas.")
 
 
+class TrelloBoardListSummary(BaseModel):
+    list_id: str = Field(..., description="ID de la lista resumida.")
+    name: str = Field(..., description="Nombre de la lista envuelto en <list_name>.")
+    overdue_cards: int = Field(0, description="Cards asignadas al usuario, no completadas y vencidas en esta lista.")
+    pending_cards: int = Field(0, description="Cards asignadas al usuario, no completadas y no vencidas en esta lista.")
+    completed_cards: int = Field(0, description="Cards asignadas al usuario y completadas en esta lista.")
+    total_assigned_cards: int = Field(0, description="Total de cards asignadas al usuario en esta lista.")
+
+
 class TrelloBoardSummary(BaseModel):
     board_id: str = Field(..., description="ID del tablero.")
     name: str = Field(..., description="Nombre del tablero envuelto en <board_name>.")
@@ -106,6 +115,7 @@ class TrelloBoardSummary(BaseModel):
     pending_cards: int = Field(0, description="Cards asignadas al usuario, no completadas y no vencidas.")
     completed_cards: int = Field(0, description="Cards asignadas al usuario y completadas.")
     total_assigned_cards: int = Field(0, description="Total de cards asignadas al usuario en el tablero.")
+    lists: List[TrelloBoardListSummary] = Field(default_factory=list, description="Resumen de cards asignadas por lista del tablero.")
 
 
 api_key = os.getenv("TRELLO_API_KEY")
@@ -401,13 +411,42 @@ def _sort_trello_cards_default(cards: List[TrelloGeneralCard]) -> None:
     cards.sort(key=lambda card: 1 if card.due_complete else 0)
 
 
-def _summarize_board_cards_for_user(board_id: str, user_id: str) -> Dict[str, int]:
+def _fetch_board_lists_for_summary(board_id: str) -> List[TrelloBoardListSummary]:
+    url = f"https://api.trello.com/1/boards/{board_id}/lists"
+    params = {
+        "key": api_key,
+        "token": api_token,
+        "filter": "all",
+        "fields": "id,name",
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        raw_lists = response.json()
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Error al conectar con la API de Trello para listar columnas del tablero {board_id}: {str(e)}")
+
+    board_lists = []
+    for item in raw_lists:
+        board_lists.append(TrelloBoardListSummary(
+            list_id=item.get("id"),
+            name=_wrap(item.get("name", ""), "list_name"),
+        ))
+
+    return board_lists
+
+
+def _summarize_board_cards_for_user(board_id: str, user_id: str) -> Dict[str, Any]:
+    board_lists = _fetch_board_lists_for_summary(board_id)
+    lists_by_id = {item.list_id: item for item in board_lists}
+
     url = f"https://api.trello.com/1/boards/{board_id}/cards"
     params = {
         "key": api_key,
         "token": api_token,
         "filter": "open",
-        "fields": "id,due,dueComplete,idMembers",
+        "fields": "id,due,dueComplete,idMembers,idList",
     }
 
     try:
@@ -422,18 +461,34 @@ def _summarize_board_cards_for_user(board_id: str, user_id: str) -> Dict[str, in
         "pending_cards": 0,
         "completed_cards": 0,
         "total_assigned_cards": 0,
+        "lists": board_lists,
     }
     for card in raw_cards:
         if user_id not in (card.get("idMembers") or []):
             continue
 
+        list_id = card.get("idList") or ""
+        list_summary = lists_by_id.get(list_id)
+        if list_summary is None:
+            list_summary = TrelloBoardListSummary(
+                list_id=list_id,
+                name=_wrap("", "list_name"),
+            )
+            lists_by_id[list_id] = list_summary
+            board_lists.append(list_summary)
+
         summary["total_assigned_cards"] += 1
         if card.get("dueComplete"):
             summary["completed_cards"] += 1
+            list_summary.completed_cards += 1
         elif _is_trello_card_overdue(card):
             summary["overdue_cards"] += 1
+            list_summary.overdue_cards += 1
         else:
             summary["pending_cards"] += 1
+            list_summary.pending_cards += 1
+
+        list_summary.total_assigned_cards += 1
 
     return summary
 
