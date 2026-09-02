@@ -19,6 +19,7 @@ class TrelloCardHelpersTest(unittest.TestCase):
             "desc": "<card_desc>Description</card_desc>",
             "due": "2026-12-31T23:59:59.000Z",
             "dueComplete": False,
+            "dateLastActivity": "2026-09-02T12:00:00.000Z",
             "closed": False,
             "shortUrl": "https://trello.com/c/card-1",
             "members": [{
@@ -35,6 +36,7 @@ class TrelloCardHelpersTest(unittest.TestCase):
         self.assertEqual(result.name, "<card_name>Task</card_name>")
         self.assertEqual(result.description_preview, "<card_desc>Description</card_desc>")
         self.assertEqual(result.due_date, "2026-12-31T23:59:59.000Z")
+        self.assertEqual(result.date_last_activity, "2026-09-02T12:00:00.000Z")
         self.assertEqual(result.url, "https://trello.com/c/card-1")
         self.assertEqual(result.assigned_user[0].user_id, "member-1")
         self.assertEqual(result.assigned_user[0].full_name, "Andres Pomen")
@@ -48,6 +50,7 @@ class TrelloCardHelpersTest(unittest.TestCase):
             "desc": "Full description",
             "due": None,
             "dueComplete": False,
+            "dateLastActivity": "2026-09-01T12:00:00.000Z",
             "closed": False,
             "members": [{"id": "member-1", "username": "apomen", "fullName": "Andres Pomen", "initials": "AP"}],
             "checklists": [{
@@ -65,6 +68,7 @@ class TrelloCardHelpersTest(unittest.TestCase):
         })
 
         self.assertIsInstance(result, trello.TrelloDetailedCard)
+        self.assertEqual(result.date_last_activity, "2026-09-01T12:00:00.000Z")
         self.assertEqual(result.description, "<card_desc>Full description</card_desc>")
         self.assertEqual(result.assigned_user[0].username, "apomen")
         self.assertEqual(result.checklists[0].items[0].name, "<check_item>Item</check_item>")
@@ -150,24 +154,108 @@ class TrelloCardBatchTest(unittest.TestCase):
 
     def test_list_cards_returns_general_card_models(self):
         response = Mock()
-        response.json.return_value = [{
-            "id": "card-1",
-            "idList": "list-1",
-            "name": "Task",
-            "desc": "Description",
-            "due": None,
-            "dueComplete": False,
-            "closed": False,
-            "members": [{"id": "member-1", "username": "apomen", "fullName": "Andres Pomen"}],
-        }]
+        response.json.return_value = [
+            {
+                "id": "card-old",
+                "idList": "list-1",
+                "name": "Old task",
+                "desc": "Description",
+                "due": None,
+                "dueComplete": False,
+                "dateLastActivity": "2026-09-01T12:00:00.000Z",
+                "closed": False,
+                "members": [{"id": "member-1", "username": "apomen", "fullName": "Andres Pomen"}],
+            },
+            {
+                "id": "card-new",
+                "idList": "list-1",
+                "name": "New task",
+                "desc": "Description",
+                "due": None,
+                "dueComplete": False,
+                "dateLastActivity": "2026-09-02T12:00:00.000Z",
+                "closed": False,
+                "members": [{"id": "member-1", "username": "apomen", "fullName": "Andres Pomen"}],
+            },
+        ]
 
         with patch.object(trello, "_validate_list_board_id"):
             with patch.object(trello.requests, "get", return_value=response):
                 result = trello.get_trello_cards_in_list("list-1")
 
-        self.assertEqual(len(result), 1)
-        self.assertIsInstance(result[0], trello.TrelloGeneralCard)
-        self.assertEqual(result[0].assigned_user[0].username, "apomen")
+        self.assertIsInstance(result, trello.TrelloCardsPage)
+        self.assertEqual(len(result.cards), 2)
+        self.assertIsInstance(result.cards[0], trello.TrelloGeneralCard)
+        self.assertEqual([card.card_id for card in result.cards], ["card-new", "card-old"])
+        self.assertEqual(result.cards[0].date_last_activity, "2026-09-02T12:00:00.000Z")
+        self.assertEqual(result.cards[0].assigned_user[0].username, "apomen")
+        self.assertEqual(result.page, 1)
+        self.assertEqual(result.page_size, 10)
+        self.assertEqual(result.total_cards, 2)
+        self.assertEqual(result.total_pages, 1)
+        self.assertFalse(result.has_next_page)
+
+    def test_list_cards_default_order_groups_status_due_and_last_activity(self):
+        response = Mock()
+        response.json.return_value = [
+            {
+                "id": "complete-earliest",
+                "idList": "list-1",
+                "name": "Complete earliest",
+                "desc": "Description",
+                "due": "2026-09-01T12:00:00.000Z",
+                "dueComplete": True,
+                "dateLastActivity": "2026-09-05T12:00:00.000Z",
+            },
+            {
+                "id": "incomplete-no-due-new",
+                "idList": "list-1",
+                "name": "Incomplete no due new",
+                "desc": "Description",
+                "due": None,
+                "dueComplete": False,
+                "dateLastActivity": "2026-09-06T12:00:00.000Z",
+            },
+            {
+                "id": "incomplete-later-due",
+                "idList": "list-1",
+                "name": "Incomplete later due",
+                "desc": "Description",
+                "due": "2026-09-04T12:00:00.000Z",
+                "dueComplete": False,
+                "dateLastActivity": "2026-09-07T12:00:00.000Z",
+            },
+            {
+                "id": "incomplete-earlier-due",
+                "idList": "list-1",
+                "name": "Incomplete earlier due",
+                "desc": "Description",
+                "due": "2026-09-02T12:00:00.000Z",
+                "dueComplete": False,
+                "dateLastActivity": "2026-09-01T12:00:00.000Z",
+            },
+            {
+                "id": "incomplete-no-due-old",
+                "idList": "list-1",
+                "name": "Incomplete no due old",
+                "desc": "Description",
+                "due": None,
+                "dueComplete": False,
+                "dateLastActivity": "2026-09-03T12:00:00.000Z",
+            },
+        ]
+
+        with patch.object(trello, "_validate_list_board_id"):
+            with patch.object(trello.requests, "get", return_value=response):
+                result = trello.get_trello_cards_in_list("list-1")
+
+        self.assertEqual([card.card_id for card in result.cards], [
+            "incomplete-earlier-due",
+            "incomplete-later-due",
+            "incomplete-no-due-new",
+            "incomplete-no-due-old",
+            "complete-earliest",
+        ])
 
     def test_list_cards_requests_assigned_users_in_same_trello_call(self):
         response = Mock()
@@ -181,6 +269,172 @@ class TrelloCardBatchTest(unittest.TestCase):
         self.assertEqual(params["members"], "true")
         self.assertEqual(params["member_fields"], "id,username,fullName,initials")
         self.assertIn("idMembers", params["fields"])
+        self.assertIn("dateLastActivity", params["fields"])
+
+    def test_list_cards_paginates_after_sorting(self):
+        response = Mock()
+        response.json.return_value = [
+            {
+                "id": f"card-{index}",
+                "idList": "list-1",
+                "name": f"Task {index}",
+                "desc": "Description",
+                "dateLastActivity": f"2026-09-{index:02d}T12:00:00.000Z",
+            }
+            for index in range(1, 26)
+        ]
+
+        with patch.object(trello, "_validate_list_board_id"):
+            with patch.object(trello.requests, "get", return_value=response):
+                result = trello.get_trello_cards_in_list(
+                    "list-1",
+                    page=2,
+                    page_size=10,
+                )
+
+        self.assertEqual([card.card_id for card in result.cards], [
+            "card-15",
+            "card-14",
+            "card-13",
+            "card-12",
+            "card-11",
+            "card-10",
+            "card-9",
+            "card-8",
+            "card-7",
+            "card-6",
+        ])
+        self.assertEqual(result.page, 2)
+        self.assertEqual(result.page_size, 10)
+        self.assertEqual(result.total_cards, 25)
+        self.assertEqual(result.total_pages, 3)
+        self.assertTrue(result.has_next_page)
+
+    def test_list_cards_rejects_page_size_above_default_max(self):
+        response = Mock()
+        response.json.return_value = []
+
+        with patch.dict(trello.os.environ, {}, clear=True):
+            with patch.object(trello, "_validate_list_board_id"):
+                with patch.object(trello.requests, "get", return_value=response):
+                    with self.assertRaisesRegex(ValueError, "no puede exceder 100"):
+                        trello.get_trello_cards_in_list("list-1", page_size=101)
+
+    def test_list_cards_allows_configurable_max_page_size(self):
+        response = Mock()
+        response.json.return_value = [
+            {
+                "id": f"card-{index}",
+                "idList": "list-1",
+                "name": f"Task {index}",
+                "desc": "Description",
+                "dateLastActivity": f"2026-09-{index:02d}T12:00:00.000Z",
+            }
+            for index in range(1, 151)
+        ]
+
+        with patch.dict(trello.os.environ, {"TRELLO_CARDS_MAX_PAGE_SIZE": "150"}):
+            with patch.object(trello, "_validate_list_board_id"):
+                with patch.object(trello.requests, "get", return_value=response):
+                    result = trello.get_trello_cards_in_list("list-1", page_size=150)
+
+        self.assertEqual(len(result.cards), 150)
+        self.assertEqual(result.page_size, 150)
+        self.assertEqual(result.total_pages, 1)
+
+    def test_count_trello_cards_in_lists_counts_each_list_and_total(self):
+        response_one = Mock()
+        response_one.json.return_value = [{"id": "card-1"}, {"id": "card-2"}]
+        response_two = Mock()
+        response_two.json.return_value = [{"id": "card-3"}]
+
+        with patch.object(trello, "_validate_list_board_id") as validate_list:
+            with patch.object(trello.requests, "get", side_effect=[response_one, response_two]) as get:
+                result = trello.count_trello_cards_in_lists(" list-1, list-2, list-1 ")
+
+        self.assertIsInstance(result, trello.TrelloCardsCountResult)
+        self.assertEqual(
+            [call.kwargs["list_id"] for call in validate_list.call_args_list],
+            ["list-1", "list-2"],
+        )
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual([item.list_id for item in result.lists], ["list-1", "list-2"])
+        self.assertEqual([item.total_cards for item in result.lists], [2, 1])
+        self.assertEqual(result.total_cards, 3)
+
+    def test_get_trello_boards_returns_user_card_summary(self):
+        boards_response = Mock()
+        boards_response.json.return_value = [
+            {
+                "id": trello.ALLOWED_BOARDS[0],
+                "name": "Board 1",
+                "desc": "Description",
+                "closed": False,
+                "idOrganization": "org-1",
+                "url": "https://trello.com/b/board-1",
+                "shortLink": "short-1",
+                "shortUrl": "https://trello.com/b/short-1",
+            },
+            {
+                "id": "disallowed-board",
+                "name": "Ignored",
+                "desc": "",
+            },
+        ]
+        cards_response = Mock()
+        cards_response.json.return_value = [
+            {
+                "id": "overdue",
+                "idMembers": ["member-1"],
+                "due": "2026-01-01T00:00:00.000Z",
+                "dueComplete": False,
+            },
+            {
+                "id": "pending",
+                "idMembers": ["member-1"],
+                "due": "2999-01-01T00:00:00.000Z",
+                "dueComplete": False,
+            },
+            {
+                "id": "pending-no-due",
+                "idMembers": ["member-1"],
+                "due": None,
+                "dueComplete": False,
+            },
+            {
+                "id": "completed",
+                "idMembers": ["member-1"],
+                "due": "2026-01-01T00:00:00.000Z",
+                "dueComplete": True,
+            },
+            {
+                "id": "not-assigned",
+                "idMembers": ["member-2"],
+                "due": "2026-01-01T00:00:00.000Z",
+                "dueComplete": False,
+            },
+        ]
+
+        with patch.object(trello, "api_key", "key"):
+            with patch.object(trello, "api_token", "token"):
+                with patch.object(trello.requests, "get", side_effect=[boards_response, cards_response]) as get:
+                    result = trello.get_trello_boards(user_id=" member-1 ")
+
+        self.assertEqual(get.call_count, 2)
+        self.assertEqual(get.call_args_list[1].args[0], f"https://api.trello.com/1/boards/{trello.ALLOWED_BOARDS[0]}/cards")
+        self.assertEqual(get.call_args_list[1].kwargs["params"]["filter"], "open")
+        self.assertEqual(len(result), 1)
+        self.assertIsInstance(result[0], trello.TrelloBoardSummary)
+        self.assertEqual(result[0].board_id, trello.ALLOWED_BOARDS[0])
+        self.assertEqual(result[0].name, "<board_name>Board 1</board_name>")
+        self.assertEqual(result[0].overdue_cards, 1)
+        self.assertEqual(result[0].pending_cards, 2)
+        self.assertEqual(result[0].completed_cards, 1)
+        self.assertEqual(result[0].total_assigned_cards, 4)
+
+    def test_get_trello_boards_requires_user_id(self):
+        with self.assertRaisesRegex(ValueError, "user_id"):
+            trello.get_trello_boards(user_id=" ")
 
     def test_board_members_returns_minimal_user_models(self):
         response = Mock()
@@ -268,6 +522,95 @@ class TrelloCardBatchTest(unittest.TestCase):
         params = put.call_args.kwargs["params"]
         self.assertEqual(params["idMembers"], "")
         self.assertEqual(result.assigned_user, [])
+
+    def test_update_card_only_sends_indicated_fields(self):
+        response = Mock()
+        response.json.return_value = {
+            "id": "card-1",
+            "idList": "list-1",
+            "name": "Task",
+            "desc": "Description",
+            "dueComplete": True,
+            "idMembers": ["member-1"],
+        }
+
+        with patch.object(trello, "_validate_card_board_id"):
+            with patch.object(trello.requests, "put", return_value=response) as put:
+                trello.update_trello_card(card_id="card-1", due_complete=True)
+
+        params = put.call_args.kwargs["params"]
+        self.assertEqual(params["dueComplete"], "true")
+        self.assertNotIn("idList", params)
+        self.assertNotIn("name", params)
+        self.assertNotIn("desc", params)
+        self.assertNotIn("due", params)
+        self.assertNotIn("idMembers", params)
+
+    def test_bulk_update_cards_updates_each_card_with_indicated_fields(self):
+        responses = []
+        for card_id in ["card-1", "card-2"]:
+            response = Mock()
+            response.json.return_value = {
+                "id": card_id,
+                "idList": "list-2",
+                "name": "Updated",
+                "desc": "Description",
+                "due": "2026-12-31T23:59:59.000Z",
+                "dueComplete": True,
+                "idMembers": ["member-1", "member-2"],
+            }
+            responses.append(response)
+
+        with patch.object(trello, "_validate_list_board_id") as validate_list:
+            with patch.object(trello, "_validate_card_board_id") as validate_card:
+                with patch.object(trello.requests, "put", side_effect=responses) as put:
+                    result = trello.bulk_update_trello_cards(
+                        card_ids="card-1, card-2, card-1",
+                        list_id="list-2",
+                        due="2026-12-31T23:59:59.000Z",
+                        due_complete=True,
+                        id_members=" member-1, member-2, member-1 ",
+                    )
+
+        validate_list.assert_called_once_with(list_id="list-2")
+        self.assertEqual(
+            [call.args[0] for call in validate_card.call_args_list],
+            ["card-1", "card-2"],
+        )
+        self.assertEqual(put.call_count, 2)
+        self.assertEqual([card.card_id for card in result], ["card-1", "card-2"])
+
+        for call in put.call_args_list:
+            params = call.kwargs["params"]
+            self.assertEqual(params["idList"], "list-2")
+            self.assertEqual(params["due"], "2026-12-31T23:59:59.000Z")
+            self.assertEqual(params["dueComplete"], "true")
+            self.assertEqual(params["idMembers"], "member-1,member-2")
+            self.assertNotIn("name", params)
+            self.assertNotIn("desc", params)
+
+    def test_bulk_update_cards_can_clear_members_without_touching_other_fields(self):
+        response = Mock()
+        response.json.return_value = {
+            "id": "card-1",
+            "idList": "list-1",
+            "name": "Task",
+            "desc": "Description",
+            "idMembers": [],
+        }
+
+        with patch.object(trello, "_validate_card_board_id"):
+            with patch.object(trello.requests, "put", return_value=response) as put:
+                result = trello.bulk_update_trello_cards(
+                    card_ids="card-1",
+                    id_members="",
+                )
+
+        params = put.call_args.kwargs["params"]
+        self.assertEqual(params["idMembers"], "")
+        self.assertNotIn("idList", params)
+        self.assertNotIn("dueComplete", params)
+        self.assertEqual(result[0].assigned_user, [])
 
 
 if __name__ == "__main__":

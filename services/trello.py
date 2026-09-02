@@ -1,6 +1,7 @@
 import io
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pydantic import BaseModel, Field
 import requests
 from typing import List, Dict, Any, Literal, Annotated, Optional, Union
@@ -82,6 +83,31 @@ class TrelloCardsPage(BaseModel):
     has_next_page: bool = Field(..., description="Indica si existe una pagina siguiente.")
 
 
+class TrelloListCardCount(BaseModel):
+    list_id: str = Field(..., description="ID de la lista contada.")
+    total_cards: int = Field(..., description="Cantidad de cards en la lista.")
+
+
+class TrelloCardsCountResult(BaseModel):
+    lists: List[TrelloListCardCount] = Field(default_factory=list, description="Conteo de cards por lista.")
+    total_cards: int = Field(..., description="Cantidad total de cards en todas las listas solicitadas.")
+
+
+class TrelloBoardSummary(BaseModel):
+    board_id: str = Field(..., description="ID del tablero.")
+    name: str = Field(..., description="Nombre del tablero envuelto en <board_name>.")
+    description: str = Field(..., description="Descripcion del tablero envuelta en <board_desc>.")
+    is_archived: bool = Field(False, description="Indica si el tablero esta archivado.")
+    organization_id: Optional[str] = Field(None, description="ID de organizacion del tablero.")
+    url: Optional[str] = Field(None, description="URL del tablero.")
+    short_link: Optional[str] = Field(None, description="Short link del tablero.")
+    short_url: Optional[str] = Field(None, description="Short URL del tablero.")
+    overdue_cards: int = Field(0, description="Cards asignadas al usuario, no completadas y vencidas.")
+    pending_cards: int = Field(0, description="Cards asignadas al usuario, no completadas y no vencidas.")
+    completed_cards: int = Field(0, description="Cards asignadas al usuario y completadas.")
+    total_assigned_cards: int = Field(0, description="Total de cards asignadas al usuario en el tablero.")
+
+
 api_key = os.getenv("TRELLO_API_KEY")
 api_token = os.getenv("TRELLO_API_TOKEN") or os.getenv("TRELLO_TOKEN")
     
@@ -141,6 +167,22 @@ def _parse_card_ids(card_ids: str) -> List[str]:
     return parsed_ids
 
 
+def _parse_comma_separated_ids(raw_ids: str, item_name: str) -> List[str]:
+    parsed_ids = []
+    seen_ids = set()
+    for raw_id in raw_ids.split(","):
+        parsed_id = raw_id.strip()
+        if not parsed_id or parsed_id in seen_ids:
+            continue
+        parsed_ids.append(parsed_id)
+        seen_ids.add(parsed_id)
+
+    if not parsed_ids:
+        raise ValueError(f"Debe proveer al menos un ID de {item_name}.")
+
+    return parsed_ids
+
+
 def _normalize_comma_separated_ids(raw_ids: Optional[str]) -> str:
     if raw_ids is None:
         return ""
@@ -186,6 +228,31 @@ def _validate_trello_cards_pagination(page: int, page_size: int) -> tuple[int, i
         )
 
     return page, page_size, max_page_size
+
+
+def _parse_trello_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_trello_card_overdue(card_data: Dict[str, Any], now: Optional[datetime] = None) -> bool:
+    if card_data.get("dueComplete"):
+        return False
+
+    due = _parse_trello_datetime(card_data.get("due"))
+    if due is None:
+        return False
+
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=timezone.utc)
+
+    return due < current_time
 
 
 def _build_assigned_users(card_data: Dict[str, Any]) -> List[TrelloAssignedUser]:
@@ -334,13 +401,56 @@ def _sort_trello_cards_default(cards: List[TrelloGeneralCard]) -> None:
     cards.sort(key=lambda card: 1 if card.due_complete else 0)
 
 
-def get_trello_boards() -> List[Dict[str, Any]]:
+def _summarize_board_cards_for_user(board_id: str, user_id: str) -> Dict[str, int]:
+    url = f"https://api.trello.com/1/boards/{board_id}/cards"
+    params = {
+        "key": api_key,
+        "token": api_token,
+        "filter": "open",
+        "fields": "id,due,dueComplete,idMembers",
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        raw_cards = response.json()
+    except requests.exceptions.RequestException as e:
+        raise RuntimeError(f"Error al conectar con la API de Trello para resumir el tablero {board_id}: {str(e)}")
+
+    summary = {
+        "overdue_cards": 0,
+        "pending_cards": 0,
+        "completed_cards": 0,
+        "total_assigned_cards": 0,
+    }
+    for card in raw_cards:
+        if user_id not in (card.get("idMembers") or []):
+            continue
+
+        summary["total_assigned_cards"] += 1
+        if card.get("dueComplete"):
+            summary["completed_cards"] += 1
+        elif _is_trello_card_overdue(card):
+            summary["overdue_cards"] += 1
+        else:
+            summary["pending_cards"] += 1
+
+    return summary
+
+
+def get_trello_boards(
+    user_id: Annotated[str, Field(description="ID obligatorio del miembro de Trello usado para contar cards asignadas por tablero.")]
+) -> List[TrelloBoardSummary]:
     """
-    Recupera y lista todos los tableros (juntas) de la cuenta de Trello.
+    Recupera tableros autorizados y resume cards abiertas asignadas al usuario indicado.
 
     Returns:
-        List[Dict[str, Any]]: Una lista de diccionarios con el ID, nombre de cada tablero (junta).
+        List[TrelloBoardSummary]: Tableros autorizados con conteos de vencidas, pendientes y completadas.
     """
+
+    safe_user_id = user_id.strip()
+    if not safe_user_id:
+        raise ValueError("Debe proveer un user_id de Trello.")
 
     if not api_key or not api_token:
         raise ValueError("Faltan las credenciales 'TRELLO_API_KEY' o 'TRELLO_API_TOKEN' en las variables de entorno.")
@@ -370,19 +480,23 @@ def get_trello_boards() -> List[Dict[str, Any]]:
         safe_name = raw_name.replace("</board_name>", "").replace("<board_name>", "").strip()
         safe_desc = raw_desc.replace("</board_desc>", "").replace("<board_desc>", "").strip()
 
-        allowed_boards.append({
-            "id": board.get("id"),
-            "board_id": board.get("id"),
-            "name": f"<board_name>{safe_name}</board_name>",
-            "description": f"<board_desc>{safe_desc}</board_desc>",
-            "is_archived": board.get("closed", False),
-            "organization_id": board.get("idOrganization"),
-            "url": board.get("url"),
-            "shortLink": board.get("shortLink"),
-            "shortUrl": board.get("shortUrl"),
-        })
+        board_id = board.get("id")
+        summary = _summarize_board_cards_for_user(board_id, safe_user_id)
+
+        allowed_boards.append(TrelloBoardSummary(
+            board_id=board_id,
+            name=f"<board_name>{safe_name}</board_name>",
+            description=f"<board_desc>{safe_desc}</board_desc>",
+            is_archived=board.get("closed", False),
+            organization_id=board.get("idOrganization"),
+            url=board.get("url"),
+            short_link=board.get("shortLink"),
+            short_url=board.get("shortUrl"),
+            **summary,
+        ))
 
     print(f"\n================ [MCP TRELLO BOARDS] ================")
+    print(f"Usuario resumido: {safe_user_id}")
     print(f"Tableros autorizados encontrados: {len(allowed_boards)}")
     print(f"======================================================\n")
 
@@ -442,6 +556,49 @@ def get_trello_board_lists(
     print(f"========================================================\n")
 
     return sanitized_lists
+
+
+def count_trello_cards_in_lists(
+    list_ids: Annotated[str, Field(description="Uno o varios IDs de listas de Trello separados por comas.")]
+) -> TrelloCardsCountResult:
+    """
+    Cuenta cards en una o varias listas de Trello sin devolver el detalle de las cards.
+    """
+    parsed_list_ids = _parse_comma_separated_ids(list_ids, "lista de Trello")
+    counts = []
+
+    for list_id in parsed_list_ids:
+        _validate_list_board_id(list_id=list_id)
+        url = f"https://api.trello.com/1/lists/{list_id}/cards"
+        params = {
+            "key": api_key,
+            "token": api_token,
+            "fields": "id",
+        }
+
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            raw_cards = response.json()
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Error al contar cards en la lista {list_id}: {str(e)}")
+
+        counts.append(TrelloListCardCount(
+            list_id=list_id,
+            total_cards=len(raw_cards),
+        ))
+
+    result = TrelloCardsCountResult(
+        lists=counts,
+        total_cards=sum(item.total_cards for item in counts),
+    )
+
+    print(f"\n================ [MCP TRELLO CARD COUNT] ================")
+    print(f"Listas contadas: {len(result.lists)}")
+    print(f"Total cards: {result.total_cards}")
+    print(f"=========================================================\n")
+
+    return result
 
 
 def get_trello_board_members(
