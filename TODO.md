@@ -73,4 +73,7 @@ X AGREGAR UN FILTRO LIKE PARA LOS FILTROS EN LIST CARDS
 - LIMITAR CADENAS DE 5 TOOLS TAN RAPIDO (MESSAGES RATE LIMIT) (TOOL CALL RATE LIMIT) (USAR METODO TOKEN BUCKET DE STRIPE)
 - OPENCLAW (MSG RATE LIMIT) (TOKEN LIMITS IN TIME - USAR MÉTODO DE TOKEN BUCKET TAMBIEN DE STRIPE)
 - VALIDAR QUE UN USUARIO TENGA PERMISO DE EJECUTAR TOOLS
+- Una vez concluido lo previo probar en consola de hooks IMPRIMIR LOS DATOS DEL USUARIO QE MANDO UN MENSAJE, CANAL, PERFIL Y PERMISOS
+
+- En formato resumen de tableros trello por defecto ocultar archivados agg parametro para mostrarlos opcional
 - Para las tareas de Office usar subagente, considerar y medir gpt-5-nano si no con gpt-4o-mini tamos bien
