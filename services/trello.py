@@ -641,6 +641,38 @@ def write_trello_card_in_list(
 
     return result
 
+def _build_trello_card_update_params(
+    list_id: Optional[str] = None,
+    name: Optional[str] = None,
+    desc: Optional[str] = None,
+    due: Optional[str] = None,
+    due_complete: Optional[bool] = None,
+    id_members: Optional[str] = None,
+) -> Dict[str, Any]:
+    params = {
+        "key": api_key,
+        "token": api_token,
+        "fields": "id,name,desc,due,dueComplete,closed,idList,shortUrl,url,idMembers",
+        "members": "true",
+        "member_fields": "id,username,fullName,initials",
+    }
+
+    if list_id:
+        params["idList"] = list_id
+    if name is not None:
+        params["name"] = name.replace("</card_name>", "").replace("<card_name>", "").strip()
+    if desc is not None:
+        params["desc"] = desc.replace("</card_desc>", "").replace("<card_desc>", "").strip()
+    if due is not None:
+        params["due"] = due
+    if due_complete is not None:
+        params["dueComplete"] = "true" if due_complete else "false"
+    if id_members is not None:
+        params["idMembers"] = _normalize_comma_separated_ids(id_members)
+
+    return params
+
+
 # TODO: marcar como approval only
 def update_trello_card(
     card_id: Annotated[str, Field(description="El ID de la tarjeta que se va a actualizar o mover.")],
@@ -663,28 +695,14 @@ def update_trello_card(
         _validate_list_board_id(list_id=list_id)
     
     url = f"https://api.trello.com/1/cards/{card_id}"
-    params = {
-        "key": api_key,
-        "token": api_token,
-        "fields": "id,name,desc,due,dueComplete,closed,idList,shortUrl,url,idMembers",
-        "members": "true",
-        "member_fields": "id,username,fullName,initials",
-    }
-
-    if list_id:
-        params["idList"] = list_id
-    if name is not None:
-        safe_name = name.replace("</card_name>", "").replace("<card_name>", "").strip()
-        params["name"] = safe_name
-    if desc is not None:
-        safe_desc = desc.replace("</card_desc>", "").replace("<card_desc>", "").strip()
-        params["desc"] = safe_desc
-    if due:
-        params["due"] = due
-    if due_complete is not None:
-        params["dueComplete"] = "true" if due_complete else "false"
-    if assigned_user is not None:
-        params["idMembers"] = _normalize_comma_separated_ids(assigned_user)
+    params = _build_trello_card_update_params(
+        list_id=list_id,
+        name=name,
+        desc=desc,
+        due=due,
+        due_complete=due_complete,
+        id_members=assigned_user,
+    )
 
     try:
         response = requests.put(url, params=params, timeout=10)
@@ -702,6 +720,56 @@ def update_trello_card(
     print(f"========================================================\n")
 
     return result
+
+
+# TODO: marcar como approval only
+def bulk_update_trello_cards(
+    card_ids: Annotated[str, Field(description="IDs de tarjetas de Trello separados por comas. Se eliminan vacios y duplicados conservando el orden.")],
+    list_id: Annotated[Optional[str], Field(description="ID de la nueva lista (columna) si se desea mover todas las tarjetas. None deja la lista actual intacta.")] = None,
+    name: Annotated[Optional[str], Field(description="Nuevo nombre o titulo para todas las tarjetas. None deja el nombre intacto.")] = None,
+    desc: Annotated[Optional[str], Field(description="Nueva descripcion detallada para todas las tarjetas. None deja la descripcion intacta.")] = None,
+    due: Annotated[Optional[str], Field(description="Nueva fecha de vencimiento ISO para todas las tarjetas. None deja la fecha intacta.")] = None,
+    due_complete: Annotated[Optional[bool], Field(description="Marca todas las tarjetas/fechas de vencimiento como completadas o no completadas. None deja el estado intacto.")] = None,
+    id_members: Annotated[Optional[str], Field(description="IDs de miembros de Trello separados por comas para reemplazar asignados en todas las tarjetas. None deja asignados intactos; string vacio los limpia.")] = None,
+) -> List[TrelloGeneralCard]:
+    """
+    Actualiza varias tarjetas de Trello con los campos indicados.
+    Solo se envian a Trello los campos provistos; los campos None quedan intactos.
+    """
+    parsed_card_ids = _parse_card_ids(card_ids)
+    if list_id:
+        _validate_list_board_id(list_id=list_id)
+
+    results = []
+    for card_id in parsed_card_ids:
+        _validate_card_board_id(card_id)
+
+        url = f"https://api.trello.com/1/cards/{card_id}"
+        params = _build_trello_card_update_params(
+            list_id=list_id,
+            name=name,
+            desc=desc,
+            due=due,
+            due_complete=due_complete,
+            id_members=id_members,
+        )
+
+        try:
+            response = requests.put(url, params=params, timeout=10)
+            response.raise_for_status()
+            updated_card = response.json()
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"Error al actualizar la tarjeta {card_id} en la API de Trello: {str(e)}")
+
+        results.append(_build_trello_general_card(updated_card))
+
+    print(f"\n================ [MCP TRELLO CARD BULK UPDATE] ================")
+    print(f"Tarjetas actualizadas: {len(results)}")
+    print(f"Lista destino: {list_id or '(sin cambios)'}")
+    print(f"Due complete: {due_complete if due_complete is not None else '(sin cambios)'}")
+    print(f"===============================================================\n")
+
+    return results
 
 
 def attach_file_to_trello_card(
