@@ -8,6 +8,9 @@ from bs4 import BeautifulSoup
 from services.graph_client import graph_get, graph_post, graph_patch, graph_delete
 
 DEFAULT_EVENTS_LIMIT = 15
+DEFAULT_OUTLOOK_MAILS_PAGE_SIZE = 10
+DEFAULT_OUTLOOK_MAILS_MAX_PAGE_SIZE = 100
+OUTLOOK_MAILS_MAX_PAGE_SIZE_ENV = "OUTLOOK_MAILS_MAX_PAGE_SIZE"
 
 def _user_path(account: Optional[str] = None) -> str:
     if account:
@@ -20,6 +23,38 @@ def _user_path(account: Optional[str] = None) -> str:
         return f"/users/{target}"
     return "/me"
 
+
+def _get_outlook_mails_max_page_size() -> int:
+    raw_max = os.getenv(OUTLOOK_MAILS_MAX_PAGE_SIZE_ENV)
+    if raw_max is None:
+        return DEFAULT_OUTLOOK_MAILS_MAX_PAGE_SIZE
+
+    try:
+        configured_max = int(raw_max)
+    except ValueError:
+        return DEFAULT_OUTLOOK_MAILS_MAX_PAGE_SIZE
+
+    if configured_max < 1:
+        return DEFAULT_OUTLOOK_MAILS_MAX_PAGE_SIZE
+
+    return configured_max
+
+
+def _validate_outlook_mails_pagination(page: int, page_size: int) -> tuple[int, int, int]:
+    max_page_size = _get_outlook_mails_max_page_size()
+    if page < 1:
+        raise ValueError("La pagina debe ser mayor o igual a 1.")
+    if page_size < 1:
+        raise ValueError("La cantidad de correos por pagina debe ser mayor o igual a 1.")
+    if page_size > max_page_size:
+        raise ValueError(
+            f"La cantidad de correos por pagina no puede exceder {max_page_size}. "
+            f"Configure {OUTLOOK_MAILS_MAX_PAGE_SIZE_ENV} para cambiar este limite."
+        )
+
+    return page, page_size, max_page_size
+
+
 class OutlookFilter(BaseModel):
     field: Literal["subject", "body", "sender_email", "sender_name", 
         "unread", "received_time", "has_attachment", "entry_id" 
@@ -27,6 +62,14 @@ class OutlookFilter(BaseModel):
     operator: Literal["=", "!=", "LIKE", ">=", "<=", ">", "<"
                       ] = Field(..., description="Operador lógico para la comparación.")
     value: str = Field(..., description="El valor contra el cual comparar (ej. 'sostenibilidad', 'true', '00000000D9...').")
+
+
+class OutlookMailsPage(BaseModel):
+    mails: List[Dict[str, Any]] = Field(default_factory=list, description="Correos de la pagina solicitada.")
+    page: int = Field(..., description="Numero de pagina retornado, basado en 1.")
+    page_size: int = Field(..., description="Cantidad de correos por pagina aplicada.")
+    has_next_page: bool = Field(..., description="Indica si existe una pagina siguiente.")
+
 
 class CreateEmailDto(BaseModel):
     to: str = Field(..., description="Dirección(es) de correo del destinatario (separadas por punto y coma si son varias).")
@@ -85,16 +128,18 @@ def list_folders_from_account(
     return result
 
 def list_mails_in_folder(
-    account: Annotated[str, Field(description="Dirección de correo electrónico o nombre de la cuenta a consultar (ej: 'usuario@ejemplo.com').")],
-    filters: Annotated[Optional[List[OutlookFilter]], Field(description="Lista opcional de filtros estructurados para buscar correos específicos.")] = None,
-    folder_name: Annotated[Optional[str], Field(description="Nombre de la carpeta a consultar (ej: 'Bandeja de entrada'). Si es None, consulta la Bandeja de entrada por defecto.")] = None,
-    limit: Annotated[Optional[int], Field(description="Cantidad máxima de correos a retornar.")] = None
-) -> List[Dict[str, Any]]:
+    account: Annotated[str, Field(description="Direccion de correo electronico o nombre de la cuenta a consultar.")],
+    filters: Annotated[Optional[List[OutlookFilter]], Field(description="Lista opcional de filtros estructurados para buscar correos especificos.")] = None,
+    folder_name: Annotated[Optional[str], Field(description="Nombre de la carpeta a consultar. Si es None, consulta inbox.")] = None,
+    page: Annotated[int, Field(description="Pagina a retornar, basada en 1.")] = 1,
+    page_size: Annotated[int, Field(description="Correos por pagina. Default 10. No puede exceder OUTLOOK_MAILS_MAX_PAGE_SIZE, o 100 si la variable no existe.")] = DEFAULT_OUTLOOK_MAILS_PAGE_SIZE
+) -> OutlookMailsPage:
     """
-    Lista los correos de una carpeta específica de una cuenta usando Microsoft Graph API.
+    Lista correos de una carpeta de una cuenta usando Microsoft Graph API con paginacion.
     """
     base_path = _user_path(account)
-    
+    page, page_size, max_page_size = _validate_outlook_mails_pagination(page, page_size)
+
     if not folder_name or folder_name.lower() in ["bandeja de entrada", "inbox"]:
         folder_endpoint = f"{base_path}/mailFolders/inbox/messages"
     else:
@@ -109,9 +154,10 @@ def list_mails_in_folder(
         else:
             folder_endpoint = f"{base_path}/messages"
 
-    max_items = limit if limit is not None else 10
+    page_start = (page - 1) * page_size
     params = {
-        "$top": max_items,
+        "$top": page_size + 1,
+        "$skip": page_start,
         "$orderby": "receivedDateTime desc",
         "$select": "id,subject,sender,receivedDateTime,isRead"
     }
@@ -139,9 +185,11 @@ def list_mails_in_folder(
 
     res = graph_get(folder_endpoint, params=params)
     messages = res.get("value", [])
+    has_next_page = len(messages) > page_size
+    page_messages = messages[:page_size]
 
     emails_list = []
-    for msg in messages:
+    for msg in page_messages:
         sender_info = msg.get("sender", {}).get("emailAddress", {})
         emails_list.append({
             "subject": msg.get("subject", ""),
@@ -152,7 +200,20 @@ def list_mails_in_folder(
             "entry_id": msg.get("id")
         })
 
-    return emails_list
+    print(f"\n================ [MCP OUTLOOK MAILS] ================")
+    print(f"Cuenta: {account}")
+    print(f"Carpeta: {folder_name or 'inbox'}")
+    print(f"Correos devueltos: {len(emails_list)}")
+    print(f"Pagina: {page} - Page size: {page_size} - Max page size: {max_page_size}")
+    print(f"Has next page: {has_next_page}")
+    print(f"=====================================================\n")
+
+    return OutlookMailsPage(
+        mails=emails_list,
+        page=page,
+        page_size=page_size,
+        has_next_page=has_next_page,
+    )
 
 def get_email_body_by_id(
     account: Annotated[str, Field(description="Nombre o dirección de correo de la cuenta a la que pertenece el correo.")],
